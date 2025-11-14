@@ -1,0 +1,89 @@
+{
+  "users": [
+    {
+      "name": "admin",
+      "password": "CHANGE_THIS_PASSWORD",
+      "tags": "administrator"
+    }
+  ],
+  "vhosts": [
+    { "name": "/" }
+  ],
+  "permissions": [
+    {
+      "user": "admin",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "example_exchange",
+      "vhost": "/",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "dlx_exchange",
+      "vhost": "/",
+      "type": "fanout",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "example.queue",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "dlx_exchange"
+      }
+    },
+    {
+      "name": "example.queue.dead",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": [
+    {
+      "source": "example_exchange",
+      "vhost": "/",
+      "destination": "example.queue",
+      "destination_type": "queue",
+      "routing_key": "example.queue",
+      "arguments": {}
+    },
+    {
+      "source": "dlx_exchange",
+      "vhost": "/",
+      "destination": "example.queue.dead",
+      "destination_type": "queue",
+      "routing_key": "",
+      "arguments": {}
+    }
+  ],
+  "policies": [
+    {
+      "vhost": "/",
+      "name": "DLX-policy",
+      "pattern": ".*",
+      "definition": {
+        "dead-letter-exchange": "dlx_exchange"
+      },
+      "priority": 0,
+      "apply-to": "queues"
+    }
+  ]
+}

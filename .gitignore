@@ -1,0 +1,119 @@
+# =============================================================================
+# .gitignore - Arquivos e diretórios ignorados pelo Git
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Variáveis de Ambiente e Configurações Sensíveis
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# Arquivos de scripts com variáveis (gerados automaticamente)
+.env.scripts
+
+# -----------------------------------------------------------------------------
+# Dados e Logs do RabbitMQ (persistência local)
+# -----------------------------------------------------------------------------
+# Ignorar TODO o conteúdo dos diretórios, mas manter os diretórios versionados
+# Os diretórios são mantidos através de arquivos .gitkeep
+
+# Dados do RabbitMQ - ignora conteúdo mas mantém diretório
+rabbit_data/*
+!rabbit_data/.gitkeep
+
+# Logs do RabbitMQ - ignora conteúdo mas mantém diretório
+rabbit_logs/*
+!rabbit_logs/.gitkeep
+
+# Arquivos de log individuais (em qualquer lugar)
+*.log
+*.log.*
+
+# -----------------------------------------------------------------------------
+# Arquivos de Definições
+# -----------------------------------------------------------------------------
+# O definitions.json é gerado dinamicamente pelo script generate_definitions.sh
+# Ignorar o arquivo gerado, mas manter os exemplos versionados
+rabbit_definitions/definitions.json
+rabbit_definitions/*.json
+!rabbit_definitions/*.example
+!rabbit_definitions/definitions.json.example
+
+# -----------------------------------------------------------------------------
+# Arquivos Temporários e de Sistema
+# -----------------------------------------------------------------------------
+# Arquivos temporários
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Arquivos de backup
+*.backup
+*.bak
+*.old
+*~
+
+# Arquivos de lock
+*.lock
+*.pid
+
+# -----------------------------------------------------------------------------
+# Arquivos de Editores e IDEs
+# -----------------------------------------------------------------------------
+# Vim
+*.swp
+*.swo
+*~
+.vim/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# IntelliJ IDEA / PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# -----------------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------------
+# Arquivos de contexto Docker (se houver build customizado no futuro)
+.dockerignore.local
+
+# -----------------------------------------------------------------------------
+# Scripts Temporários
+# -----------------------------------------------------------------------------
+# Scripts de teste ou temporários
+*.sh.tmp
+*.sh.bak
+
+# -----------------------------------------------------------------------------
+# Arquivos de Documentação Gerados
+# -----------------------------------------------------------------------------
+# Se houver documentação gerada automaticamente
+docs/_build/
+site/
+
+# -----------------------------------------------------------------------------
+# Outros
+# -----------------------------------------------------------------------------
+# Arquivos de teste local
+test-local.*
+*.test.local
+
+# Arquivos de configuração local
+config.local.*
+*.local.*

@@ -1,0 +1,115 @@
+# =============================================================================
+# docker-compose.yml - Ambiente RabbitMQ com Docker Swarm
+# =============================================================================
+# Configura o container RabbitMQ para uso em ambiente Docker Swarm.
+# Inclui:
+# - RabbitMQ com console de gerenciamento (porta 15672)
+# - Volumes locais para persistência de dados e logs
+# - Redes overlay compatíveis com Docker Swarm
+# - Configurações para filas duráveis e mensagens persistentes
+# =============================================================================
+
+services:
+  rabbitmq:
+    # Usando versão específica para evitar problemas com atualizações futuras
+    # Versão: RabbitMQ 3.13.3 com Management Plugin
+    image: rabbitmq:3.13.3-management
+    # container_name e hostname não são suportados em Docker Swarm mode
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+      - RABBITMQ_DEFAULT_VHOST=${RABBITMQ_DEFAULT_VHOST}
+      - RABBITMQ_MNESIA_BASE=/var/lib/rabbitmq/mnesia
+      - RABBITMQ_ERLANG_COOKIE=${RABBITMQ_ERLANG_COOKIE}
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbitmq_management load_definitions "/etc/rabbitmq/definitions.json"
+
+      # -------------------------------------------------------------------------
+      # HABILITAR PLUGINS ADICIONAIS (opcional)
+      # -------------------------------------------------------------------------
+      # - RABBITMQ_ENABLED_PLUGINS_FILE=/etc/rabbitmq/enabled_plugins
+      # Você pode ativar manualmente no container:
+      # rabbitmq-plugins enable rabbitmq_shovel rabbitmq_shovel_management
+
+      # -------------------------------------------------------------------------
+      # HABILITAR POLÍTICA GLOBAL PARA FILAS DURÁVEIS E DLX
+      # -------------------------------------------------------------------------
+      # A política abaixo (comentada) define que todas as filas criadas serão duráveis
+      # e terão uma fila "dead-letter" associada (útil para reprocessamento)
+      #
+      # - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbitmq_management load_definitions "/etc/rabbitmq/definitions.json"
+      #
+      # Você pode criar um arquivo definitions.json com a política DLX como exemplo:
+      # {
+      #   "policies": [{
+      #     "vhost": "/",
+      #     "name": "DLX-policy",
+      #     "pattern": ".*",
+      #     "definition": {
+      #       "dead-letter-exchange": "dlx_exchange",
+      #       "durable": true
+      #     },
+      #     "priority": 0,
+      #     "apply-to": "queues"
+      #   }]
+      # }
+      #
+      # E montá-lo via volume:
+      # - ./rabbit_definitions:/etc/rabbitmq/definitions.json
+
+    # ---------------------------------------------------------------------------
+    # PORTAS - descomente se quiser acessar o painel ou consumir externamente
+    # ---------------------------------------------------------------------------
+    # ports:
+    #   - "5672:5672"     # Porta padrão AMQP
+    #   - "15672:15672"   # Painel de administração (RabbitMQ Management)
+
+    volumes:
+      # Volumes locais (persistência no host)
+      - ./rabbit_data:/var/lib/rabbitmq
+      - ./rabbit_logs:/var/log/rabbitmq
+      - ./rabbit_definitions/definitions.json:/etc/rabbitmq/definitions.json
+
+      # Caso queira usar volumes gerenciados pelo Docker, descomente abaixo:
+      # - rabbitmq_data:/var/lib/rabbitmq
+      # - rabbitmq_logs:/var/log/rabbitmq
+
+      # Opcional: se for usar definições pré-carregadas de filas/exchanges/policies:
+      # - ./rabbit_definitions:/etc/rabbitmq/definitions.json
+
+    networks:
+      - rabbitmq_network
+      - shared_dev_net   # Rede compartilhada para comunicação entre stacks
+      - net_nginx_pm
+
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+      update_config:
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 0
+        order: stop-first
+
+# =============================================================================
+# Volumes (opcionais - use se não quiser montar locais)
+# =============================================================================
+# volumes:
+#   rabbitmq_data:
+#     driver: local
+#   rabbitmq_logs:
+#     driver: local
+
+# =============================================================================
+# Redes compatíveis com Docker Swarm
+# =============================================================================
+networks:
+  rabbitmq_network:
+    driver: overlay
+    attachable: true
+  shared_dev_net:
+    external: true
+  net_nginx_pm:
+    external: true
