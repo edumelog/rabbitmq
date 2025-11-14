@@ -29,14 +29,16 @@ Este projeto fornece um ambiente Docker completo para executar RabbitMQ com:
 
 ```
 rabbitmq/
-├── docker-compose.yml          # Configuração da stack RabbitMQ
-├── env.example                 # Exemplo de variáveis de ambiente
-├── start_stack.sh             # Script para iniciar a stack
-├── stop_stack.sh              # Script para parar a stack
-├── [nome]_data/               # Dados persistentes (mnesia)
-├── [nome]_logs/               # Logs do RabbitMQ
-├── [nome]_definitions/        # Definições (filas, exchanges, políticas)
-│   └── definitions.json       # Arquivo de definições do RabbitMQ
+├── docker-compose.yml              # Configuração da stack RabbitMQ
+├── .env.example                    # Exemplo de variáveis de ambiente
+├── generate_definitions.sh         # Gerador interativo de definitions.json
+├── start_stack.sh                  # Script para iniciar a stack
+├── stop_stack.sh                   # Script para parar a stack
+├── rabbit_data/                    # Dados persistentes (mnesia)
+├── rabbit_logs/                    # Logs do RabbitMQ
+├── rabbit_definitions/             # Definições (filas, exchanges, políticas)
+│   ├── definitions.json.example    # Exemplo de definitions.json
+│   └── definitions.json            # Arquivo gerado (não versionado)
 └── README.md
 ```
 
@@ -106,23 +108,34 @@ STACK_NAME=my-stack
 
 ### 3. Configure as Definições (Opcional)
 
+O arquivo `definitions.json` é usado pelo RabbitMQ para pré-configurar usuários, exchanges, filas, bindings e políticas. Ele é carregado automaticamente na inicialização.
+
 **Opção 1 - Gerador Interativo (Recomendado):**
 ```bash
 ./generate_definitions.sh
 ```
-O script guia você passo a passo para criar o `definitions.json` personalizado.
 
-**Opção 2 - Manual:**
+O script irá:
+- Explicar o que é definitions.json
+- Perguntar nome e senha do administrador
+- Perguntar quais filas criar
+- Perguntar se cada fila deve ter Dead Letter Exchange
+- Gerar o arquivo `rabbit_definitions/definitions.json` automaticamente
+
+**Opção 2 - Copiar e Editar Manualmente:**
 ```bash
 cp rabbit_definitions/definitions.json.example rabbit_definitions/definitions.json
 nano rabbit_definitions/definitions.json
 ```
 
-Configure:
-- Usuários e permissões
-- Filas e exchanges
-- Políticas (DLX, TTL, etc.)
-- Bindings
+**Estrutura do definitions.json:**
+- **users**: Usuários do RabbitMQ com credenciais e permissões
+- **exchanges**: Roteadores de mensagens (direct, fanout, topic, headers)
+- **queues**: Filas onde as mensagens são armazenadas
+- **bindings**: Vinculações entre exchanges e filas
+- **policies**: Políticas globais (ex: Dead Letter Exchange)
+
+**⚠️ IMPORTANTE**: O arquivo `definitions.json` é gerado dinamicamente e não é versionado. Use o `definitions.json.example` como referência.
 
 ## 🚀 Scripts de Automação
 
@@ -214,7 +227,7 @@ docker service inspect [stack-name]_[service-name]
 ./stop_stack.sh
 ```
 
-Os dados em `[nome]_data/` e logs em `[nome]_logs/` serão preservados.
+Os dados em `rabbit_data/` e logs em `rabbit_logs/` serão preservados.
 
 ## 🔧 Configurações Avançadas
 
@@ -222,7 +235,7 @@ Os dados em `[nome]_data/` e logs em `[nome]_logs/` serão preservados.
 
 O projeto usa três redes:
 
-1. **`[nome]_network`**: Rede específica do projeto (criada automaticamente)
+1. **`rabbitmq_network`**: Rede específica do projeto (criada automaticamente)
 2. **`shared_dev_net`**: Rede compartilhada para comunicação entre stacks (criada automaticamente)
 3. **`net_nginx_pm`**: Rede externa compartilhada (deve existir ou será criada)
 
@@ -230,13 +243,28 @@ O projeto usa três redes:
 
 Os seguintes volumes são mapeados:
 
-- `[nome]_data/` → `/var/lib/rabbitmq` (dados persistentes)
-- `[nome]_logs/` → `/var/log/rabbitmq` (logs)
-- `[nome]_definitions/definitions.json` → `/etc/rabbitmq/definitions.json` (definições)
+- `rabbit_data/` → `/var/lib/rabbitmq` (dados persistentes)
+- `rabbit_logs/` → `/var/log/rabbitmq` (logs)
+- `rabbit_definitions/definitions.json` → `/etc/rabbitmq/definitions.json` (definições)
 
 ### Healthcheck
 
 O RabbitMQ possui healthcheck configurado que verifica o status do serviço a cada 30 segundos.
+
+### Dead Letter Exchange (DLX)
+
+O Dead Letter Exchange é usado para tratar mensagens que não puderam ser processadas:
+- Mensagens rejeitadas (nack)
+- Mensagens expiradas (TTL)
+- Mensagens que excederam o limite de tentativas
+
+**Como funciona:**
+1. Configure a fila principal com `x-dead-letter-exchange: "dlx_exchange"` nos arguments
+2. Crie uma fila `.dead` correspondente (ex: `minha.fila.dead`)
+3. Vincule a fila dead ao `dlx_exchange` (tipo fanout)
+4. Mensagens não processadas serão automaticamente enviadas para a fila dead
+
+O script `generate_definitions.sh` configura isso automaticamente quando você indica que uma fila deve ter Dead Letter.
 
 ## 🚨 Troubleshooting
 
@@ -298,8 +326,8 @@ docker service ps [stack-name]_[service-name]
 
 ```bash
 # Ajustar permissões dos diretórios
-sudo chown -R 999:999 [nome]_data/
-sudo chown -R 999:999 [nome]_logs/
+sudo chown -R 999:999 rabbit_data/
+sudo chown -R 999:999 rabbit_logs/
 ```
 
 O RabbitMQ roda como usuário `rabbitmq` (UID 999).
@@ -315,9 +343,9 @@ O RabbitMQ roda como usuário `rabbitmq` (UID 999).
 
 ### Persistência
 
-- Os dados são armazenados em `[nome]_data/`
-- Os logs são armazenados em `[nome]_logs/`
-- As definições estão em `[nome]_definitions/definitions.json`
+- Os dados são armazenados em `rabbit_data/`
+- Os logs são armazenados em `rabbit_logs/`
+- As definições estão em `rabbit_definitions/definitions.json` (gerado dinamicamente)
 - Esses diretórios são preservados mesmo após parar a stack
 
 ### Atualização da Versão
@@ -346,10 +374,34 @@ Para fazer backup dos dados:
 
 ```bash
 # Backup dos dados
-tar -czf rabbitmq_data_backup_$(date +%Y%m%d).tar.gz [nome]_data/
+tar -czf rabbitmq_data_backup_$(date +%Y%m%d).tar.gz rabbit_data/
 
 # Backup das definições
-cp [nome]_definitions/definitions.json definitions_backup_$(date +%Y%m%d).json
+cp rabbit_definitions/definitions.json definitions_backup_$(date +%Y%m%d).json
+```
+
+### Gerar definitions.json
+
+Use o script interativo para criar ou atualizar o `definitions.json`:
+
+```bash
+./generate_definitions.sh
+```
+
+O script permite:
+- Configurar usuário e senha do administrador
+- Criar múltiplas filas
+- Configurar Dead Letter Exchange para cada fila
+- Gerar automaticamente exchanges, bindings e políticas
+
+**Aplicar mudanças após gerar:**
+```bash
+# Reiniciar a stack
+./stop_stack.sh
+./start_stack.sh
+
+# Ou recarregar definições sem reiniciar
+docker exec -it $(docker ps -q -f name=rabbitmq) rabbitmqctl load_definitions /etc/rabbitmq/definitions.json
 ```
 
 ## 🔗 Recursos Adicionais
