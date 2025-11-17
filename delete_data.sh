@@ -108,16 +108,40 @@ check_rabbitmq_running() {
             
             # Tentar parar via docker-compose
             if [ -f "docker-compose.yml" ]; then
+                log_info "Parando containers do docker-compose..."
                 docker compose -f docker-compose.yml down 2>/dev/null || true
             fi
             
             # Tentar parar via stack (se existir stop_stack.sh)
             if [ -f "stop_stack.sh" ] && [ -x "stop_stack.sh" ]; then
-                ./stop_stack.sh || true
+                log_info "Parando stack do Docker Swarm..."
+                # Executar stop_stack.sh de forma não-interativa se possível
+                echo "y" | ./stop_stack.sh 2>/dev/null || ./stop_stack.sh || true
             fi
             
             # Aguardar um pouco para garantir que os containers foram parados
-            sleep 3
+            log_info "Aguardando containers pararem completamente..."
+            sleep 5
+            
+            # Verificar se ainda há containers rodando
+            STILL_RUNNING=$(docker ps --format "{{.Names}}" | grep -i rabbitmq | wc -l)
+            if [ "$STILL_RUNNING" -gt 0 ]; then
+                log_warning "Ainda há ${STILL_RUNNING} container(s) RabbitMQ rodando."
+                log_info "Tentando parar forçadamente..."
+                docker ps --format "{{.Names}}" | grep -i rabbitmq | xargs -r docker stop 2>/dev/null || true
+                sleep 3
+            fi
+            
+            # Verificar processos que possam estar usando os arquivos
+            log_info "Verificando se há processos usando os arquivos..."
+            if command -v lsof >/dev/null 2>&1; then
+                LOCKED_FILES=$(sudo lsof +D "$RABBIT_DATA_DIR" 2>/dev/null | wc -l || echo "0")
+                if [ "$LOCKED_FILES" -gt 0 ]; then
+                    log_warning "Ainda há processos usando arquivos em ${RABBIT_DATA_DIR}"
+                    log_info "Aguardando mais um pouco..."
+                    sleep 5
+                fi
+            fi
             
             log_success "RabbitMQ parado"
         else
@@ -262,19 +286,66 @@ clean_directory() {
     
     # Contar arquivos antes
     FILE_COUNT=$(find "$dir" -type f 2>/dev/null | wc -l)
+    DIR_COUNT=$(find "$dir" -mindepth 1 -type d 2>/dev/null | wc -l)
     
-    if [ "$FILE_COUNT" -eq 0 ]; then
+    if [ "$FILE_COUNT" -eq 0 ] && [ "$DIR_COUNT" -eq 0 ]; then
         log_info "${dir_name} já está vazio."
         return
     fi
     
-    # Remover todo o conteúdo, mas manter o diretório
-    find "$dir" -mindepth 1 -delete 2>/dev/null || {
-        # Se find falhar, tentar rm -rf
-        rm -rf "${dir}"/* "${dir}"/.* 2>/dev/null || true
-    }
+    # Tentar ajustar permissões primeiro (caso os arquivos sejam do RabbitMQ - UID 999)
+    log_info "Ajustando permissões..."
+    if command -v sudo >/dev/null 2>&1; then
+        # Tentar com sudo primeiro (mais seguro)
+        sudo chmod -R u+rwx "$dir" 2>/dev/null || true
+        sudo chown -R "$USER:$USER" "$dir" 2>/dev/null || true
+    else
+        # Tentar sem sudo (pode falhar se não tiver permissão)
+        chmod -R u+rwx "$dir" 2>/dev/null || true
+    fi
     
-    log_success "${dir_name} limpo (${FILE_COUNT} arquivo(s) removido(s))"
+    # Remover todo o conteúdo, mas manter o diretório
+    # Tentar múltiplas estratégias para garantir que funcione
+    
+    # Estratégia 1: find -delete (mais eficiente)
+    if find "$dir" -mindepth 1 -delete 2>/dev/null; then
+        log_success "${dir_name} limpo (${FILE_COUNT} arquivo(s) e ${DIR_COUNT} diretório(s) removido(s))"
+        return
+    fi
+    
+    # Estratégia 2: rm -rf com sudo se necessário
+    log_warning "Tentando com privilégios elevados..."
+    if command -v sudo >/dev/null 2>&1; then
+        if sudo rm -rf "${dir}"/* "${dir}"/.[!.]* "${dir}"/..?* 2>/dev/null; then
+            log_success "${dir_name} limpo com sudo (${FILE_COUNT} arquivo(s) e ${DIR_COUNT} diretório(s) removido(s))"
+            return
+        fi
+    fi
+    
+    # Estratégia 3: rm -rf sem sudo (pode falhar)
+    if rm -rf "${dir}"/* "${dir}"/.[!.]* "${dir}"/..?* 2>/dev/null; then
+        log_success "${dir_name} limpo (${FILE_COUNT} arquivo(s) e ${DIR_COUNT} diretório(s) removido(s))"
+        return
+    fi
+    
+    # Se todas as estratégias falharam
+    log_error "Não foi possível limpar ${dir_name} completamente!"
+    log_error "Alguns arquivos podem ter permissões restritivas."
+    log_info "Tente executar manualmente:"
+    if command -v sudo >/dev/null 2>&1; then
+        echo -e "  ${BLUE}sudo rm -rf ${dir}/*${NC}"
+    else
+        echo -e "  ${BLUE}rm -rf ${dir}/*${NC}"
+        echo -e "  ${YELLOW}(pode ser necessário executar como root)${NC}"
+    fi
+    
+    # Verificar se ainda há arquivos
+    REMAINING=$(find "$dir" -mindepth 1 2>/dev/null | wc -l)
+    if [ "$REMAINING" -gt 0 ]; then
+        log_warning "Ainda restam ${REMAINING} item(s) em ${dir_name}"
+    else
+        log_success "${dir_name} limpo (pode ter havido avisos, mas está vazio agora)"
+    fi
 }
 
 # Função para apagar definitions.json
@@ -286,9 +357,67 @@ delete_definitions() {
     fi
 }
 
+# Função para verificar se precisa de sudo
+check_sudo_requirements() {
+    log_info "Verificando permissões dos diretórios..."
+    
+    # Verificar se consegue escrever nos diretórios
+    NEEDS_SUDO=0
+    
+    if [ -d "$RABBIT_DATA_DIR" ]; then
+        if [ ! -w "$RABBIT_DATA_DIR" ]; then
+            NEEDS_SUDO=1
+        fi
+        # Verificar se há arquivos sem permissão de escrita
+        if find "$RABBIT_DATA_DIR" -type f ! -w 2>/dev/null | head -1 | grep -q .; then
+            NEEDS_SUDO=1
+        fi
+    fi
+    
+    if [ -d "$RABBIT_LOGS_DIR" ]; then
+        if [ ! -w "$RABBIT_LOGS_DIR" ]; then
+            NEEDS_SUDO=1
+        fi
+        # Verificar se há arquivos sem permissão de escrita
+        if find "$RABBIT_LOGS_DIR" -type f ! -w 2>/dev/null | head -1 | grep -q .; then
+            NEEDS_SUDO=1
+        fi
+    fi
+    
+    if [ "$NEEDS_SUDO" -eq 1 ]; then
+        if command -v sudo >/dev/null 2>&1; then
+            log_warning "Alguns arquivos requerem privilégios elevados para exclusão."
+            log_info "O script tentará usar sudo quando necessário."
+            echo ""
+            # Verificar se o usuário tem sudo sem senha (opcional)
+            if sudo -n true 2>/dev/null; then
+                log_success "Sudo configurado (sem senha requerida)"
+            else
+                log_warning "Você pode ser solicitado a inserir sua senha sudo."
+            fi
+        else
+            log_error "Alguns arquivos requerem privilégios elevados, mas sudo não está disponível!"
+            log_error "Execute o script como root ou instale sudo."
+            return 1
+        fi
+    else
+        log_success "Permissões adequadas detectadas"
+    fi
+    
+    return 0
+}
+
 # Função principal de limpeza
 perform_cleanup() {
     print_header "🧹 Limpando Dados do RabbitMQ"
+    
+    echo ""
+    
+    # Verificar se precisa de sudo
+    if ! check_sudo_requirements; then
+        log_error "Não é possível continuar sem privilégios adequados."
+        exit 1
+    fi
     
     echo ""
     
