@@ -107,8 +107,11 @@ print_info "Pressione Enter sem digitar nada para finalizar."
 echo ""
 
 QUEUES=()
+QUEUES_VHOST=()
 QUEUES_DLX=()
 EXCHANGES=()
+EXCHANGES_VHOST=()
+VHOSTS=()
 
 QUEUE_COUNT=0
 
@@ -128,7 +131,24 @@ while true; do
         continue
     fi
     
+    # Perguntar o virtualhost
+    read -p "  Virtualhost para a fila '$QUEUE_NAME' [/]: " QUEUE_VHOST
+    QUEUE_VHOST=${QUEUE_VHOST:-/}
+    
+    # Validar nome do vhost
+    if [[ ! "$QUEUE_VHOST" =~ ^[a-zA-Z0-9/._-]+$ ]]; then
+        print_error "Virtualhost inválido! Use apenas letras, números, barras, pontos, hífens e underscores."
+        QUEUE_COUNT=$((QUEUE_COUNT - 1))
+        continue
+    fi
+    
     QUEUES+=("$QUEUE_NAME")
+    QUEUES_VHOST+=("$QUEUE_VHOST")
+    
+    # Adicionar vhost à lista de vhosts únicos
+    if [[ ! " ${VHOSTS[@]} " =~ " ${QUEUE_VHOST} " ]]; then
+        VHOSTS+=("$QUEUE_VHOST")
+    fi
     
     # Perguntar sobre Dead Letter
     read -p "  Esta fila deve ter tratamento de Dead Letter? (s/N): " -r USE_DLX
@@ -143,9 +163,11 @@ while true; do
     # Exemplo: ocr.jobs -> ocr_exchange, elastic.status -> elastic_exchange
     EXCHANGE_NAME=$(echo "$QUEUE_NAME" | cut -d'.' -f1 | sed 's/-/_/g')"_exchange"
     
-    # Verificar se a exchange já foi adicionada
-    if [[ ! " ${EXCHANGES[@]} " =~ " ${EXCHANGE_NAME} " ]]; then
-        EXCHANGES+=("$EXCHANGE_NAME")
+    # Verificar se a exchange já foi adicionada para este vhost
+    EXCHANGE_KEY="${EXCHANGE_NAME}@${QUEUE_VHOST}"
+    if [[ ! " ${EXCHANGES[@]} " =~ " ${EXCHANGE_KEY} " ]]; then
+        EXCHANGES+=("$EXCHANGE_KEY")
+        EXCHANGES_VHOST+=("$QUEUE_VHOST")
     fi
 done
 
@@ -154,11 +176,24 @@ if [ ${#QUEUES[@]} -eq 0 ]; then
     exit 1
 fi
 
-# Adicionar DLX exchange se houver filas com DLX
+# Garantir que o vhost padrão "/" esteja sempre na lista
+if [[ ! " ${VHOSTS[@]} " =~ " / " ]]; then
+    VHOSTS+=("/")
+fi
+
+# Adicionar DLX exchange para cada vhost que tiver filas com DLX
 if [ ${#QUEUES_DLX[@]} -gt 0 ]; then
-    if [[ ! " ${EXCHANGES[@]} " =~ " dlx_exchange " ]]; then
-        EXCHANGES+=("dlx_exchange")
-    fi
+    for i in "${!QUEUES[@]}"; do
+        QUEUE="${QUEUES[$i]}"
+        if [[ " ${QUEUES_DLX[@]} " =~ " ${QUEUE} " ]]; then
+            QUEUE_VHOST="${QUEUES_VHOST[$i]}"
+            DLX_KEY="dlx_exchange@${QUEUE_VHOST}"
+            if [[ ! " ${EXCHANGES[@]} " =~ " ${DLX_KEY} " ]]; then
+                EXCHANGES+=("$DLX_KEY")
+                EXCHANGES_VHOST+=("$QUEUE_VHOST")
+            fi
+        fi
+    done
 fi
 
 # =============================================================================
@@ -169,16 +204,25 @@ print_header "📋 Resumo da Configuração"
 echo ""
 echo "  👤 Usuário: ${CYAN}${ADMIN_USER}${NC}"
 echo "  📬 Filas: ${CYAN}${#QUEUES[@]}${NC}"
-for queue in "${QUEUES[@]}"; do
-    if [[ " ${QUEUES_DLX[@]} " =~ " ${queue} " ]]; then
-        echo "    • $queue ${GREEN}(com Dead Letter)${NC}"
+for i in "${!QUEUES[@]}"; do
+    QUEUE="${QUEUES[$i]}"
+    QUEUE_VHOST="${QUEUES_VHOST[$i]}"
+    if [[ " ${QUEUES_DLX[@]} " =~ " ${QUEUE} " ]]; then
+        echo "    • ${QUEUE} @ ${CYAN}${QUEUE_VHOST}${NC} ${GREEN}(com Dead Letter)${NC}"
     else
-        echo "    • $queue"
+        echo "    • ${QUEUE} @ ${CYAN}${QUEUE_VHOST}${NC}"
     fi
 done
 echo "  🔄 Exchanges: ${CYAN}${#EXCHANGES[@]}${NC}"
-for exchange in "${EXCHANGES[@]}"; do
-    echo "    • $exchange"
+for i in "${!EXCHANGES[@]}"; do
+    EXCHANGE_KEY="${EXCHANGES[$i]}"
+    EXCHANGE_VHOST="${EXCHANGES_VHOST[$i]}"
+    EXCHANGE_NAME=$(echo "$EXCHANGE_KEY" | cut -d'@' -f1)
+    echo "    • $EXCHANGE_NAME @ ${CYAN}${EXCHANGE_VHOST}${NC}"
+done
+echo "  🌐 Virtualhosts: ${CYAN}${#VHOSTS[@]}${NC}"
+for vhost in "${VHOSTS[@]}"; do
+    echo "    • $vhost"
 done
 echo ""
 
@@ -209,24 +253,49 @@ JSON="{"
 JSON+="\n  \"users\": [\n    {\n      \"name\": \"${ADMIN_USER}\",\n      \"password\": \"${ADMIN_PASSWORD}\",\n      \"tags\": \"administrator\"\n    }\n  ],"
 
 # Vhosts
-JSON+="\n  \"vhosts\": [\n    { \"name\": \"/\" }\n  ],"
+JSON+="\n  \"vhosts\": ["
+for i in "${!VHOSTS[@]}"; do
+    VHOST="${VHOSTS[$i]}"
+    JSON+="\n    { \"name\": \"${VHOST}\" }"
+    if [ $i -lt $((${#VHOSTS[@]} - 1)) ]; then
+        JSON+=","
+    fi
+done
+JSON+="\n  ],"
 
 # Permissions
-JSON+="\n  \"permissions\": [\n    {\n      \"user\": \"${ADMIN_USER}\",\n      \"vhost\": \"/\",\n      \"configure\": \".*\",\n      \"write\": \".*\",\n      \"read\": \".*\"\n    }\n  ],"
+JSON+="\n  \"permissions\": ["
+for i in "${!VHOSTS[@]}"; do
+    VHOST="${VHOSTS[$i]}"
+    JSON+="\n    {"
+    JSON+="\n      \"user\": \"${ADMIN_USER}\","
+    JSON+="\n      \"vhost\": \"${VHOST}\","
+    JSON+="\n      \"configure\": \".*\","
+    JSON+="\n      \"write\": \".*\","
+    JSON+="\n      \"read\": \".*\""
+    JSON+="\n    }"
+    if [ $i -lt $((${#VHOSTS[@]} - 1)) ]; then
+        JSON+=","
+    fi
+done
+JSON+="\n  ],"
 
 # Exchanges
 JSON+="\n  \"exchanges\": ["
 for i in "${!EXCHANGES[@]}"; do
-    EXCHANGE="${EXCHANGES[$i]}"
-    if [ "$EXCHANGE" = "dlx_exchange" ]; then
+    EXCHANGE_KEY="${EXCHANGES[$i]}"
+    EXCHANGE_NAME=$(echo "$EXCHANGE_KEY" | cut -d'@' -f1)
+    EXCHANGE_VHOST="${EXCHANGES_VHOST[$i]}"
+    
+    if [ "$EXCHANGE_NAME" = "dlx_exchange" ]; then
         EXCHANGE_TYPE="fanout"
     else
         EXCHANGE_TYPE="direct"
     fi
     
     JSON+="\n    {"
-    JSON+="\n      \"name\": \"${EXCHANGE}\","
-    JSON+="\n      \"vhost\": \"/\","
+    JSON+="\n      \"name\": \"${EXCHANGE_NAME}\","
+    JSON+="\n      \"vhost\": \"${EXCHANGE_VHOST}\","
     JSON+="\n      \"type\": \"${EXCHANGE_TYPE}\","
     JSON+="\n      \"durable\": true,"
     JSON+="\n      \"auto_delete\": false,"
@@ -244,10 +313,11 @@ JSON+="\n  ],"
 JSON+="\n  \"queues\": ["
 for i in "${!QUEUES[@]}"; do
     QUEUE="${QUEUES[$i]}"
+    QUEUE_VHOST="${QUEUES_VHOST[$i]}"
     
     JSON+="\n    {"
     JSON+="\n      \"name\": \"${QUEUE}\","
-    JSON+="\n      \"vhost\": \"/\","
+    JSON+="\n      \"vhost\": \"${QUEUE_VHOST}\","
     JSON+="\n      \"durable\": true,"
     JSON+="\n      \"auto_delete\": false,"
     
@@ -272,11 +342,18 @@ if [ ${#QUEUES_DLX[@]} -gt 0 ]; then
     JSON+=","
     for i in "${!QUEUES_DLX[@]}"; do
         QUEUE="${QUEUES_DLX[$i]}"
+        # Encontrar o índice da fila no array principal para obter o vhost
+        for j in "${!QUEUES[@]}"; do
+            if [ "${QUEUES[$j]}" = "$QUEUE" ]; then
+                QUEUE_VHOST="${QUEUES_VHOST[$j]}"
+                break
+            fi
+        done
         DEAD_QUEUE="${QUEUE}.dead"
         
         JSON+="\n    {"
         JSON+="\n      \"name\": \"${DEAD_QUEUE}\","
-        JSON+="\n      \"vhost\": \"/\","
+        JSON+="\n      \"vhost\": \"${QUEUE_VHOST}\","
         JSON+="\n      \"durable\": true,"
         JSON+="\n      \"auto_delete\": false,"
         JSON+="\n      \"arguments\": {}"
@@ -294,7 +371,9 @@ JSON+="\n  \"bindings\": ["
 BINDING_COUNT=0
 
 # Bindings das filas principais para suas exchanges
-for QUEUE in "${QUEUES[@]}"; do
+for i in "${!QUEUES[@]}"; do
+    QUEUE="${QUEUES[$i]}"
+    QUEUE_VHOST="${QUEUES_VHOST[$i]}"
     EXCHANGE_NAME=$(echo "$QUEUE" | cut -d'.' -f1 | sed 's/-/_/g')"_exchange"
     
     if [ $BINDING_COUNT -gt 0 ]; then
@@ -303,7 +382,7 @@ for QUEUE in "${QUEUES[@]}"; do
     
     JSON+="\n    {"
     JSON+="\n      \"source\": \"${EXCHANGE_NAME}\","
-    JSON+="\n      \"vhost\": \"/\","
+    JSON+="\n      \"vhost\": \"${QUEUE_VHOST}\","
     JSON+="\n      \"destination\": \"${QUEUE}\","
     JSON+="\n      \"destination_type\": \"queue\","
     JSON+="\n      \"routing_key\": \"${QUEUE}\","
@@ -316,12 +395,19 @@ done
 # Bindings das filas dead para dlx_exchange
 if [ ${#QUEUES_DLX[@]} -gt 0 ]; then
     for QUEUE in "${QUEUES_DLX[@]}"; do
+        # Encontrar o índice da fila no array principal para obter o vhost
+        for j in "${!QUEUES[@]}"; do
+            if [ "${QUEUES[$j]}" = "$QUEUE" ]; then
+                QUEUE_VHOST="${QUEUES_VHOST[$j]}"
+                break
+            fi
+        done
         DEAD_QUEUE="${QUEUE}.dead"
         
         JSON+=","
         JSON+="\n    {"
         JSON+="\n      \"source\": \"dlx_exchange\","
-        JSON+="\n      \"vhost\": \"/\","
+        JSON+="\n      \"vhost\": \"${QUEUE_VHOST}\","
         JSON+="\n      \"destination\": \"${DEAD_QUEUE}\","
         JSON+="\n      \"destination_type\": \"queue\","
         JSON+="\n      \"routing_key\": \"\","
@@ -333,17 +419,37 @@ JSON+="\n  ],"
 
 # Policies (DLX policy se houver filas com DLX)
 if [ ${#QUEUES_DLX[@]} -gt 0 ]; then
+    # Coletar vhosts únicos que têm filas com DLX
+    DLX_VHOSTS=()
+    for QUEUE in "${QUEUES_DLX[@]}"; do
+        for j in "${!QUEUES[@]}"; do
+            if [ "${QUEUES[$j]}" = "$QUEUE" ]; then
+                QUEUE_VHOST="${QUEUES_VHOST[$j]}"
+                if [[ ! " ${DLX_VHOSTS[@]} " =~ " ${QUEUE_VHOST} " ]]; then
+                    DLX_VHOSTS+=("$QUEUE_VHOST")
+                fi
+                break
+            fi
+        done
+    done
+    
     JSON+="\n  \"policies\": ["
-    JSON+="\n    {"
-    JSON+="\n      \"vhost\": \"/\","
-    JSON+="\n      \"name\": \"DLX-policy\","
-    JSON+="\n      \"pattern\": \".*\","
-    JSON+="\n      \"definition\": {"
-    JSON+="\n        \"dead-letter-exchange\": \"dlx_exchange\""
-    JSON+="\n      },"
-    JSON+="\n      \"priority\": 0,"
-    JSON+="\n      \"apply-to\": \"queues\""
-    JSON+="\n    }"
+    for i in "${!DLX_VHOSTS[@]}"; do
+        DLX_VHOST="${DLX_VHOSTS[$i]}"
+        JSON+="\n    {"
+        JSON+="\n      \"vhost\": \"${DLX_VHOST}\","
+        JSON+="\n      \"name\": \"DLX-policy\","
+        JSON+="\n      \"pattern\": \".*\","
+        JSON+="\n      \"definition\": {"
+        JSON+="\n        \"dead-letter-exchange\": \"dlx_exchange\""
+        JSON+="\n      },"
+        JSON+="\n      \"priority\": 0,"
+        JSON+="\n      \"apply-to\": \"queues\""
+        JSON+="\n    }"
+        if [ $i -lt $((${#DLX_VHOSTS[@]} - 1)) ]; then
+            JSON+=","
+        fi
+    done
     JSON+="\n  ]"
 else
     JSON+="\n  \"policies\": []"

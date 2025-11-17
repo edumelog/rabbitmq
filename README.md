@@ -34,6 +34,7 @@ rabbitmq/
 ├── generate_definitions.sh         # Gerador interativo de definitions.json
 ├── start_stack.sh                  # Script para iniciar a stack
 ├── stop_stack.sh                   # Script para parar a stack
+├── delete_data.sh                  # Script para apagar todos os dados
 ├── rabbit_data/                    # Dados persistentes (mnesia)
 ├── rabbit_logs/                    # Logs do RabbitMQ
 ├── rabbit_definitions/             # Definições (filas, exchanges, políticas)
@@ -59,11 +60,13 @@ rabbitmq/
 - **Redes Overlay**: Comunicação segura entre serviços
 
 ### 🔧 Automação
-- **Scripts**: Início e parada automatizados da stack
+- **Scripts**: Início, parada e limpeza automatizados da stack
 - **Validação**: Verificação de pré-requisitos antes de iniciar
 - **Pull Automático**: Download automático da imagem se não existir
 - **Logs Coloridos**: Saída formatada para melhor experiência
 - **Tratamento de Erros**: Mensagens claras em caso de problemas
+- **Suporte a Múltiplos Virtualhosts**: Configuração de filas em diferentes virtualhosts
+- **Limpeza Segura**: Script com confirmação dupla para apagar dados
 
 ## 📋 Pré-requisitos
 
@@ -118,8 +121,16 @@ O arquivo `definitions.json` é usado pelo RabbitMQ para pré-configurar usuári
 O script irá:
 - Explicar o que é definitions.json
 - Perguntar nome e senha do administrador
-- Perguntar quais filas criar
-- Perguntar se cada fila deve ter Dead Letter Exchange
+- Para cada fila:
+  - Perguntar o nome da fila
+  - Perguntar o virtualhost associado (padrão: `/`)
+  - Perguntar se a fila deve ter Dead Letter Exchange
+- Gerar automaticamente:
+  - Exchanges baseadas no nome das filas
+  - Bindings entre exchanges e filas
+  - Filas dead letter (se configurado)
+  - Políticas DLX por virtualhost
+  - Permissões do usuário para todos os virtualhosts
 - Gerar o arquivo `rabbit_definitions/definitions.json` automaticamente
 
 **Opção 2 - Copiar e Editar Manualmente:**
@@ -167,6 +178,36 @@ nano rabbit_definitions/definitions.json
 - Remove a stack do Docker Swarm
 - Gerencia redes (pergunta se deseja manter ou remover)
 - Limpa recursos não utilizados
+
+### Apagar Todos os Dados
+
+```bash
+./delete_data.sh
+```
+
+**⚠️ ATENÇÃO: Esta é uma operação DESTRUTIVA e IRREVERSÍVEL!**
+
+**O que o script faz:**
+- Verifica se o RabbitMQ está rodando e oferece parar automaticamente
+- Exibe informações sobre os dados que serão apagados (tamanho, quantidade de arquivos)
+- Requer confirmação dupla de segurança:
+  - Primeiro: digitar exatamente `APAGAR TUDO`
+  - Segundo: digitar exatamente `SIM`
+- Apaga todo o conteúdo de `rabbit_data/` (dados do mnesia - filas, mensagens, exchanges)
+- Apaga todo o conteúdo de `rabbit_logs/` (todos os logs)
+- Opcionalmente pode apagar `definitions.json` (pergunta antes)
+- Preserva a estrutura dos diretórios (apenas limpa o conteúdo)
+
+**Quando usar:**
+- Quando você quer começar do zero
+- Para limpar dados de teste/desenvolvimento
+- Após mudanças significativas na estrutura de filas/exchanges
+- Para resetar completamente o ambiente
+
+**⚠️ IMPORTANTE**: 
+- Todos os dados serão perdidos permanentemente
+- Todas as filas, mensagens e exchanges serão apagadas
+- Você precisará recriar as configurações usando `generate_definitions.sh`
 
 ## 📖 Uso
 
@@ -380,6 +421,27 @@ tar -czf rabbitmq_data_backup_$(date +%Y%m%d).tar.gz rabbit_data/
 cp rabbit_definitions/definitions.json definitions_backup_$(date +%Y%m%d).json
 ```
 
+### Limpeza de Dados
+
+Para apagar todos os dados e começar do zero:
+
+```bash
+./delete_data.sh
+```
+
+**⚠️ ATENÇÃO**: Esta operação é **DESTRUTIVA** e **IRREVERSÍVEL**!
+
+O script:
+- Para o RabbitMQ automaticamente (se estiver rodando)
+- Mostra informações sobre os dados que serão apagados
+- Requer confirmação dupla de segurança
+- Apaga todos os dados de `rabbit_data/` e `rabbit_logs/`
+- Opcionalmente pode apagar `definitions.json`
+
+**Após apagar os dados:**
+1. Recrie as configurações: `./generate_definitions.sh`
+2. Inicie a stack: `./start_stack.sh`
+
 ### Gerar definitions.json
 
 Use o script interativo para criar ou atualizar o `definitions.json`:
@@ -391,8 +453,14 @@ Use o script interativo para criar ou atualizar o `definitions.json`:
 O script permite:
 - Configurar usuário e senha do administrador
 - Criar múltiplas filas
+- **Configurar virtualhost para cada fila** (suporte a múltiplos virtualhosts)
 - Configurar Dead Letter Exchange para cada fila
-- Gerar automaticamente exchanges, bindings e políticas
+- Gerar automaticamente:
+  - Exchanges baseadas no nome das filas (uma por virtualhost)
+  - Bindings entre exchanges e filas (com vhosts corretos)
+  - Filas dead letter (no mesmo virtualhost da fila original)
+  - Políticas DLX (uma por virtualhost que tiver filas com DLX)
+  - Permissões do usuário para todos os virtualhosts utilizados
 
 **Aplicar mudanças após gerar:**
 ```bash
