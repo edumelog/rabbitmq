@@ -32,6 +32,7 @@ rabbitmq/
 ├── docker-compose.yml              # Configuração da stack RabbitMQ
 ├── .env.example                    # Exemplo de variáveis de ambiente
 ├── generate_definitions.sh         # Gerador interativo de definitions.json
+├── manage_users.sh                 # Gerenciador de usuários e permissões
 ├── start_stack.sh                  # Script para iniciar a stack
 ├── stop_stack.sh                   # Script para parar a stack
 ├── delete_data.sh                  # Script para apagar todos os dados
@@ -67,6 +68,7 @@ rabbitmq/
 - **Tratamento de Erros**: Mensagens claras em caso de problemas
 - **Suporte a Múltiplos Virtualhosts**: Configuração de filas em diferentes virtualhosts
 - **Limpeza Segura**: Script com confirmação dupla para apagar dados
+- **Gerenciamento de Usuários**: Script interativo para criar, editar e gerenciar usuários e permissões
 
 ## 📋 Pré-requisitos
 
@@ -150,6 +152,16 @@ nano rabbit_definitions/definitions.json
 
 ## 🚀 Scripts de Automação
 
+### Resumo dos Scripts
+
+| Script | Utilidade | Quando Usar |
+|--------|-----------|-------------|
+| `start_stack.sh` | Inicia a stack RabbitMQ no Docker Swarm | Primeira inicialização ou após parar a stack |
+| `stop_stack.sh` | Para a stack RabbitMQ | Quando precisar parar o serviço temporariamente |
+| `generate_definitions.sh` | Gerencia filas, exchanges e virtualhosts no `definitions.json` | Criar ou modificar configurações de filas e exchanges |
+| `manage_users.sh` | Gerencia usuários e permissões no `definitions.json` | Criar, editar ou remover usuários e suas permissões |
+| `delete_data.sh` | Apaga todos os dados e logs do RabbitMQ | Resetar completamente o ambiente (⚠️ DESTRUTIVO) |
+
 ### Iniciar a Stack
 
 ```bash
@@ -178,6 +190,47 @@ nano rabbit_definitions/definitions.json
 - Remove a stack do Docker Swarm
 - Gerencia redes (pergunta se deseja manter ou remover)
 - Limpa recursos não utilizados
+
+### Gerenciar Usuários e Permissões
+
+```bash
+./manage_users.sh
+```
+
+**O que o script faz:**
+- Gerencia usuários no `definitions.json` de forma não destrutiva
+- Preserva todas as outras configurações (filas, exchanges, bindings, etc.)
+- Cria backup automático antes de qualquer modificação
+- Interface interativa com menu numerado
+
+**Funcionalidades:**
+1. **Listar usuários**: Visualiza todos os usuários e suas tags
+2. **Adicionar usuário**: Cria novo usuário com:
+   - Nome e senha
+   - Seleção de tags por número (administrator, monitoring, policymaker, management)
+   - Opção de configurar permissões imediatamente
+3. **Editar usuário**: Altera senha e/ou tags de usuários existentes
+4. **Remover usuário**: Remove usuário e todas suas permissões
+5. **Ver permissões**: Lista todas as permissões de um usuário
+6. **Gerenciar permissões por virtualhost**: Menu completo para:
+   - Adicionar permissões em um virtualhost específico
+   - Editar permissões existentes em um virtualhost
+   - Remover permissões de um virtualhost específico
+   - Seleção de virtualhost por número ou nome
+7. **Criar usuário admin padrão**: Cria usuário admin se não existir
+
+**Tags do RabbitMQ:**
+- `administrator`: Acesso administrativo completo
+- `monitoring`: Acesso para monitoramento e estatísticas
+- `policymaker`: Pode criar e gerenciar políticas
+- `management`: Acesso à API de gerenciamento
+
+**Características:**
+- Operações não destrutivas (preserva outras configurações)
+- Backup automático antes de modificações
+- Validação de dados antes de salvar
+- Seleção por número ou nome (usuários e virtualhosts)
+- Confirmação para operações destrutivas (remover usuário admin)
 
 ### Apagar Todos os Dados
 
@@ -451,16 +504,26 @@ Use o script interativo para criar ou atualizar o `definitions.json`:
 ```
 
 O script permite:
-- Configurar usuário e senha do administrador
-- Criar múltiplas filas
-- **Configurar virtualhost para cada fila** (suporte a múltiplos virtualhosts)
-- Configurar Dead Letter Exchange para cada fila
+- **Gerenciar filas**: Listar, adicionar, editar e remover filas
+- **Gerenciar virtualhosts**: Listar, adicionar e remover virtualhosts
+- **Configurar Dead Letter Exchange**: Para cada fila individualmente
 - Gerar automaticamente:
   - Exchanges baseadas no nome das filas (uma por virtualhost)
   - Bindings entre exchanges e filas (com vhosts corretos)
   - Filas dead letter (no mesmo virtualhost da fila original)
   - Políticas DLX (uma por virtualhost que tiver filas com DLX)
   - Permissões do usuário para todos os virtualhosts utilizados
+
+**Menu do script:**
+- **Gerenciar Filas**: CRUD completo de filas com seleção de virtualhost
+- **Gerenciar Virtualhosts**: Adicionar e remover virtualhosts
+- **Ver Resumo Completo**: Exibe todas as configurações antes de salvar
+
+**Características:**
+- Operações não destrutivas (preserva usuários e outras configurações)
+- Seleção de virtualhost por número ou nome
+- Validação de dados antes de salvar
+- Suporte a múltiplos virtualhosts
 
 **Aplicar mudanças após gerar:**
 ```bash
@@ -471,6 +534,8 @@ O script permite:
 # Ou recarregar definições sem reiniciar
 docker exec -it $(docker ps -q -f name=rabbitmq) rabbitmqctl load_definitions /etc/rabbitmq/definitions.json
 ```
+
+**⚠️ NOTA**: O script `generate_definitions.sh` não cria mais o usuário admin automaticamente. Use `manage_users.sh` para gerenciar usuários.
 
 ## 🔗 Recursos Adicionais
 
